@@ -15,9 +15,14 @@ import adafruit_fingerprint
 
 def set_sensor_led(color, cycles):
     try:
-        finger.set_led(color=color, mode=2, speed=100, cycles=cycles)
-    except (AttributeError, RuntimeError):
-        pass
+        result = finger.set_led(color=color, mode=2, speed=100, cycles=cycles)
+        if result != adafruit_fingerprint.OK:
+            print(f'Fingerprint sensor LED command failed with code {result}')
+            return False
+        return True
+    except (AttributeError, RuntimeError) as error:
+        print(f'Fingerprint sensor LED command is unsupported: {error}')
+        return False
 
 
 def blink_success():
