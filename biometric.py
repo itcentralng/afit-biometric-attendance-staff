@@ -18,6 +18,22 @@ import adafruit_fingerprint
 led = DigitalInOut(board.D13)
 led.direction = Direction.OUTPUT
 
+
+def blink_success():
+    for _ in range(2):
+        led.value = True
+        time.sleep(0.15)
+        led.value = False
+        time.sleep(0.15)
+
+
+def blink_failure():
+    for _ in range(3):
+        led.value = True
+        time.sleep(0.5)
+        led.value = False
+        time.sleep(0.2)
+
 # If using with Linux/Raspberry Pi and hardware UART:
 import serial
 uart = serial.Serial("/dev/ttyS0", baudrate=57600, timeout=1)
@@ -100,10 +116,12 @@ def find_fingerprint_match():
         i = finger.compare_templates()
         if i == adafruit_fingerprint.OK:
             print("Fingerprint found")
+            blink_success()
             threading.Thread(target=submit_attendance, args=(f, )).start()
             return True
         if i == adafruit_fingerprint.NOMATCH:
             pass
+    blink_failure()
     return False
 
 def submit_attendance(fingerprint):
