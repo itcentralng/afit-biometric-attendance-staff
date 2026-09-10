@@ -13,25 +13,6 @@ import time
 import adafruit_fingerprint
 
 
-def set_sensor_led(color, cycles):
-    try:
-        result = finger.set_led(color=color, mode=2, speed=100, cycles=cycles)
-        if result != adafruit_fingerprint.OK:
-            print(f'Fingerprint sensor LED command failed with code {result}')
-            return False
-        return True
-    except (AttributeError, RuntimeError) as error:
-        print(f'Fingerprint sensor LED command is unsupported: {error}')
-        return False
-
-
-def blink_success():
-    set_sensor_led(color=2, cycles=2)
-
-
-def blink_failure():
-    set_sensor_led(color=1, cycles=3)
-
 # If using with Linux/Raspberry Pi and hardware UART:
 import serial
 uart = serial.Serial("/dev/ttyS0", baudrate=57600, timeout=1)
@@ -114,13 +95,22 @@ def find_fingerprint_match():
         i = finger.compare_templates()
         if i == adafruit_fingerprint.OK:
             print("Fingerprint found")
-            blink_success()
             threading.Thread(target=submit_attendance, args=(f, )).start()
             return True
         if i == adafruit_fingerprint.NOMATCH:
             pass
-    blink_failure()
     return False
+
+
+def reset_fingerprint_connection():
+    global uart, finger
+    try:
+        finger.close_uart()
+    except (AttributeError, OSError):
+        pass
+    time.sleep(1)
+    uart = serial.Serial("/dev/ttyS0", baudrate=57600, timeout=1)
+    finger = adafruit_fingerprint.Adafruit_Fingerprint(uart)
 
 def submit_attendance(fingerprint):
     try:
@@ -143,4 +133,8 @@ def submit_attendance(fingerprint):
 
 fetch_fingerprints()
 while True:
-    find_fingerprint_match()
+    try:
+        find_fingerprint_match()
+    except (RuntimeError, OSError) as error:
+        print(f'Fingerprint sensor communication error: {error}')
+        reset_fingerprint_connection()
