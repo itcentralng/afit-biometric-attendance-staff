@@ -10,29 +10,22 @@ import zipfile
 import threading
 
 import time
-import board
-import busio
-from digitalio import DigitalInOut, Direction
 import adafruit_fingerprint
 
-led = DigitalInOut(board.D13)
-led.direction = Direction.OUTPUT
+
+def set_sensor_led(color, cycles):
+    try:
+        finger.set_led(color=color, mode=2, speed=100, cycles=cycles)
+    except (AttributeError, RuntimeError):
+        pass
 
 
 def blink_success():
-    for _ in range(2):
-        led.value = True
-        time.sleep(0.15)
-        led.value = False
-        time.sleep(0.15)
+    set_sensor_led(color=2, cycles=2)
 
 
 def blink_failure():
-    for _ in range(3):
-        led.value = True
-        time.sleep(0.5)
-        led.value = False
-        time.sleep(0.2)
+    set_sensor_led(color=1, cycles=3)
 
 # If using with Linux/Raspberry Pi and hardware UART:
 import serial
