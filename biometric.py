@@ -128,6 +128,7 @@ def submit_attendance(fingerprint):
             print('success')
         else:
             print('failed')
+            print(response.json())
     except Exception as e:
         print(e)
 
