@@ -116,7 +116,7 @@ def submit_attendance(fingerprint):
     try:
         url = f'{API_URL}/attendance/staff'
         payload = {
-            'staffid': fingerprint.split('.')[0]
+            'staffid': fingerprint.split('.dat')[0]
         }
         headers = {
             'Content-Type': 'application/json',
