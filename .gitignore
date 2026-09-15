@@ -1,3 +1,4 @@
 *.pyc
 *.pyd
 venv
+attendance_queue.db

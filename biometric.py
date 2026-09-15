@@ -8,6 +8,9 @@ from io import BytesIO
 import zipfile
 
 import threading
+import sqlite3
+import uuid
+from datetime import datetime, timedelta, timezone
 
 import time
 import adafruit_fingerprint
@@ -20,6 +23,77 @@ uart = serial.Serial("/dev/ttyS0", baudrate=57600, timeout=1)
 finger = adafruit_fingerprint.Adafruit_Fingerprint(uart)
 
 from config import API_URL
+
+QUEUE_DB = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'attendance_queue.db')
+UTC_PLUS_ONE = timezone(timedelta(hours=1))
+queue_lock = threading.Lock()
+
+
+def initialize_queue():
+    with sqlite3.connect(QUEUE_DB) as connection:
+        connection.execute(
+            '''CREATE TABLE IF NOT EXISTS pending_attendance (
+                event_id TEXT PRIMARY KEY,
+                staffid TEXT NOT NULL,
+                captured_at TEXT NOT NULL
+            )'''
+        )
+        connection.commit()
+
+
+def current_local_time():
+    return datetime.now(timezone.utc).astimezone(UTC_PLUS_ONE).replace(microsecond=0)
+
+
+def purge_old_attendance():
+    current_month = current_local_time().strftime('%Y-%m')
+    with sqlite3.connect(QUEUE_DB) as connection:
+        connection.execute(
+            'DELETE FROM pending_attendance WHERE substr(captured_at, 1, 7) != ?',
+            (current_month,),
+        )
+        connection.commit()
+
+
+def queue_attendance(staffid, captured_at):
+    with sqlite3.connect(QUEUE_DB) as connection:
+        connection.execute(
+            'INSERT INTO pending_attendance (event_id, staffid, captured_at) VALUES (?, ?, ?)',
+            (str(uuid.uuid4()), staffid, captured_at),
+        )
+        connection.commit()
+
+
+def sync_pending_attendance():
+    purge_old_attendance()
+    with queue_lock:
+        with sqlite3.connect(QUEUE_DB) as connection:
+            pending = connection.execute(
+                'SELECT event_id, staffid, captured_at FROM pending_attendance ORDER BY captured_at'
+            ).fetchall()
+
+        for event_id, staffid, captured_at in pending:
+            try:
+                response = requests.post(
+                    f'{API_URL}/attendance/staff',
+                    json={'staffid': staffid, 'captured_at': captured_at},
+                    headers={
+                        'Content-Type': 'application/json',
+                        'Authorization': getserial(),
+                    },
+                    timeout=10,
+                )
+                if response.status_code != 200 or not response.json().get('success'):
+                    print(f'Attendance sync deferred for {staffid}: {response.status_code}')
+                    continue
+            except requests.RequestException as error:
+                print(f'Attendance sync deferred: {error}')
+                continue
+
+            with sqlite3.connect(QUEUE_DB) as connection:
+                connection.execute('DELETE FROM pending_attendance WHERE event_id = ?', (event_id,))
+                connection.commit()
+            print(f'Attendance synced for {staffid} at {captured_at}')
 
 
 def getserial():
@@ -47,31 +121,25 @@ def delete_directory(directory):
 def fetch_fingerprints():
     try:
         folder = "templates"
-        delete_directory(folder)
-        # Replace with the URL of your Flask endpoint
         url = f'{API_URL}/biometric/fetch/staff'
 
-        # Make a GET request to the Flask endpoint
-        response = requests.get(url, headers={'Authorization':getserial()})
+        response = requests.get(url, headers={'Authorization': getserial()}, timeout=10)
 
         # Check if the request was successful (status code 200)
         if response.status_code == 200:
-            # Create a BytesIO object from the response content
             zip_buffer = BytesIO(response.content)
-
-            # Create a ZipFile object
             with zipfile.ZipFile(zip_buffer, 'r') as zip_file:
-                # Specify the directory where you want to extract the files
+                delete_directory(folder)
                 os.makedirs(folder, exist_ok=True)
-
-                # Extract all files to the specified directory
                 zip_file.extractall(folder)
+            return True
 
         else:
             print(f"Error: {response.status_code}")
     except Exception as e:
         print(e)
-        fetch_fingerprints()
+    print('Using existing local fingerprint templates')
+    return False
 
 
 def find_fingerprint_match():
@@ -95,7 +163,8 @@ def find_fingerprint_match():
         i = finger.compare_templates()
         if i == adafruit_fingerprint.OK:
             print("Fingerprint found")
-            threading.Thread(target=submit_attendance, args=(f, )).start()
+            captured_at = current_local_time().strftime('%Y-%m-%d %H:%M:%S')
+            threading.Thread(target=submit_attendance, args=(f, captured_at)).start()
             return True
         if i == adafruit_fingerprint.NOMATCH:
             pass
@@ -112,27 +181,28 @@ def reset_fingerprint_connection():
     uart = serial.Serial("/dev/ttyS0", baudrate=57600, timeout=1)
     finger = adafruit_fingerprint.Adafruit_Fingerprint(uart)
 
-def submit_attendance(fingerprint):
+def submit_attendance(fingerprint, captured_at):
+    staffid = fingerprint.split('.dat')[0]
     try:
-        url = f'{API_URL}/attendance/staff'
-        payload = {
-            'staffid': fingerprint.split('.dat')[0]
-        }
-        headers = {
-            'Content-Type': 'application/json',
-            'Authorization': getserial()
-        }
-        # Make a GET request to the Flask endpoint
-        response = requests.post(url, json=payload, headers=headers)
-        if response.json().get('success'):
-            print('success')
-        else:
-            print('failed')
-            print(response.json())
-    except Exception as e:
-        print(e)
+        queue_attendance(staffid, captured_at)
+        sync_pending_attendance()
+    except (OSError, sqlite3.Error) as error:
+        print(f'Unable to queue attendance for {staffid}: {error}')
 
+
+def sync_loop():
+    while True:
+        try:
+            sync_pending_attendance()
+        except (OSError, sqlite3.Error) as error:
+            print(f'Attendance queue sync error: {error}')
+        time.sleep(60)
+
+initialize_queue()
+purge_old_attendance()
 fetch_fingerprints()
+sync_pending_attendance()
+threading.Thread(target=sync_loop, daemon=True).start()
 while True:
     try:
         find_fingerprint_match()
